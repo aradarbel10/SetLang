@@ -1,0 +1,23 @@
+-- numbers, booleans, comparisons --
+print 1 + 2
+print (1 = 1)
+print false = (true /= false)
+print (1 < 100)
+/= (20 < 6)
+
+-- group values in sets --
+print ∅
+print {}
+print {1, 2, 3}
+print {1, 2, 3, 3, 4, 100 < 200, {}}
+
+-- define/assign variables --
+def var := 321
+print var
+var <- 123
+print var
+
+-- define procedures --
+def printNum := proc
+    print 42
+    NOP
