@@ -1,15 +1,21 @@
+-- single line comments
+-/ multi
+     line
+       comments /-
+NOP -- dummy statement
+
 -- numbers, booleans, comparisons --
 print 1 + 2
 print (1 = 1)
 print false = (true /= false)
 print (1 < 100)
-/= (20 < 6)
+    /= (20 < 6)
 
 -- group values in sets --
 print ∅
 print {}
 print {1, 2, 3}
-print {1, 2, 3, 3, 4, 100 < 200, {}}
+print {∅, 1, 2, 3, 3, 4, {100 < 200}, ∅}
 
 -- define/assign variables --
 def var := 321
@@ -18,6 +24,7 @@ var <- 123
 print var
 
 -- define procedures --
-def printNum := proc
+def printNum := do
     print 42
-    NOP
+
+printNum()

@@ -23,13 +23,13 @@ lexer = P.makeTokenParser $ P.LanguageDef {
     P.commentLine  = "--" ,
     P.nestedComments = True,
 
-    P.identStart = letter,
-    P.identLetter = alphaNum <|> char '_',
-    P.opStart = oneOf "!@#$%^&*()-=+{}[]/.,<>;:",
-    P.opLetter = oneOf "!@#$%^&*()-=+{}[]/.,<>;:",
+    P.identStart = letter <|> oneOf "_",
+    P.identLetter = alphaNum <|> oneOf "_",
+    P.opStart = oneOf "!@#$%^&*()-=+{}[]/.,<>;:∅",
+    P.opLetter = oneOf "!@#$%^&*()-=+{}[]/.,<>;:∅",
 
-    P.reservedNames = ["print", "NOP", "true", "false", "do", "def"],
-    P.reservedOpNames = [],
+    P.reservedNames = ["print", "NOP", "true", "false", "do", "def", "∅"],
+    P.reservedOpNames = [":=", "<-", "{", "}", ","],
 
     P.caseSensitive = True
 }
@@ -55,15 +55,15 @@ opsTable = [
                     E.Prefix (reserved "odd" $> Prefix Odd),
                     E.Prefix (reserved "neg" $> Prefix Neg)
                 ],[
-                    E.Infix (reservedOp "=" $> Infix Equals) E.AssocNone,
-                    E.Infix (reservedOp "/=" $> Infix NEquals) E.AssocNone,
-                    E.Infix (reservedOp "<" $> Infix Less) E.AssocNone
-                ],[
                     E.Infix (reservedOp "*" $> Infix Mul) E.AssocLeft,
                     E.Infix (reservedOp "/" $> Infix Div) E.AssocLeft
                 ],[
                     E.Infix (reservedOp "+" $> Infix Add) E.AssocLeft,
                     E.Infix (reservedOp "-" $> Infix Sub) E.AssocLeft
+                ],[
+                    E.Infix (reservedOp "=" $> Infix Equals) E.AssocNone,
+                    E.Infix (reservedOp "/=" $> Infix NEquals) E.AssocNone,
+                    E.Infix (reservedOp "<" $> Infix Less) E.AssocNone
                 ]
            ]
 
@@ -77,8 +77,8 @@ parse :: String -> Statement
 parse = Parser.runParser (P.whiteSpace lexer >> topLevel >> (block statementParser <&> Block))
 
 setLiteralParser :: Parser Expression
-setLiteralParser = (reservedOp "∅" $> Null) <|> do
-    es <- braces $ sepBy expressionParser (symbol ",")
+setLiteralParser = (reserved "∅" $> Null) <|> do
+    es <- braces $ sepBy expressionParser (reservedOp ",")
     return $
         if null es then Null else Set (S.fromList es)
 
@@ -86,44 +86,46 @@ printParser :: Parser Statement
 printParser = reserved "print" >> expressionParser <&> Print
 
 expressionParser :: Parser Expression
-expressionParser = E.buildExpressionParser opsTable termParser
+expressionParser = E.buildExpressionParser opsTable termsParser
 
+termsParser :: Parser Expression
+termsParser = foldl1 Applic <$>
+              do
+                  t <- termParser
+                  ts <- many (try $ indented >> (termParser <* notFollowedBy (reservedOp "<-")))
+                  return (t:ts)
+         
 termParser :: Parser Expression
-termParser = foldl1 Applic <$> many1 (sameOrIndented >> try ((
-                (IntNum <$> natural)
+termParser =    (IntNum <$> natural)
             <|> (reserved "true" $> BoolVal True)
             <|> (reserved "false" $> BoolVal False)
             <|> (Ref . Name <$> identifier)
             <|> setLiteralParser
             <|> procParser
-            <|> parens expressionParser)
-                <* notFollowedBy (
-                        reserved "<-"
-                    <|> reserved ":="
-                )))
-         
+            <|> parens expressionParser
 
 statementParser :: Parser Statement
 statementParser =
-        try definitionParser
-    <|> try printParser
-    <|>     (reserved "NOP" $> Nop)
+    try (Exec <$> (expressionParser <* notFollowedBy (reservedOp "<-")))
+    <|> definitionParser
+    <|> printParser
+    <|> (reserved "NOP" $> Nop)
 
 blockParser :: Parser Statement
-blockParser = indented >> (block statementParser <&> Block)
+blockParser = block statementParser <&> Block
 
 patternParser :: Parser Pattern
 patternParser = do
     name <- identifier
-    ps <- optionMaybe (parens $ sepBy1 identifier (symbol ","))
+    ps <- optionMaybe (parens $ sepBy1 identifier (reservedOp ","))
     return $ case ps of
         Nothing -> Name name
         Just plist -> Func name plist
 
 procParser :: Parser Expression
-procParser = reserved "do" >> Proc <$> blockParser
+procParser = reserved "do" >> Proc <$> (indented >> blockParser)
 
 definitionParser :: Parser Statement
 definitionParser =
-        (Assign     <$> (                  patternParser <* symbol "<-") <*> expressionParser)
-    <|> (Definition <$> (reserved "def" >> patternParser <* symbol ":=") <*> expressionParser)
+    try (Definition <$> (reserved "def" >> patternParser <* reservedOp ":=") <*> expressionParser)
+    <|> (Assign     <$> (                  patternParser <* reservedOp "<-") <*> expressionParser)
