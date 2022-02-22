@@ -22,9 +22,20 @@ def var := 321
 print var
 var <- 123
 print var
+var <- 666
 
--- define procedures --
-def printNum := do
-    print 42
+-- define procedures and execute them --
+def printNum := proc
+    favNum <- var
+    print favNum
 
-printNum()
+printNum
+printNum
+printNum
+
+-- definitions with parameters --
+def multiply factor := 73 * factor
+
+print multiply 1
+print multiply 2
+print multiply 10

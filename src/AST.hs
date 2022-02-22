@@ -4,7 +4,7 @@ import qualified Data.Set as S
 
 data Statement = Nop
                | Block [Statement]
-               | Definition Pattern Expression -- name(args...) = expr
+               | Definition Pattern Expression
                | Assign Pattern Expression
                | Exec Expression
                | Print Expression
@@ -14,8 +14,10 @@ isDef :: Statement -> Bool
 isDef (Definition _ _) = True
 isDef _                = False
 
-data Pattern = Name String
-             | Func String [String]
+data Pattern = Pattern String [(String, Type)]
+    deriving (Show, Eq, Ord)
+
+data Type = Top | Bottom
     deriving (Show, Eq, Ord)
 
 data Expression = Null
@@ -23,8 +25,8 @@ data Expression = Null
                 | Set (S.Set Expression)
                 | IntNum Integer
                 | FracNum Rational
-                | Ref Pattern
-                | Applic Expression Expression
+                | Ref String
+                | Applic Expression [Expression]
                 | IfElse Expression Expression Expression -- if condition then expr else expr
                 | Prefix PreOp Expression
                 | Infix BinOp Expression Expression
