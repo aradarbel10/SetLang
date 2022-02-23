@@ -1,6 +1,15 @@
 module AST where
 
 import qualified Data.Set as S
+import qualified Data.Map as M
+
+type Scope = M.Map Pattern Expression
+type Scopes = [Scope];
+data Context = Context {
+                        names :: Scopes,
+                        stdout :: String
+                       }
+
 
 data Statement = Nop
                | Block [Statement]
@@ -10,14 +19,18 @@ data Statement = Nop
                | Print Expression
     deriving (Show, Eq, Ord)
 
-isDef :: Statement -> Bool
-isDef (Definition _ _) = True
-isDef _                = False
+funcDef :: Pattern -> Expression -> Statement
+funcDef = Definition
+
+procDef :: Pattern -> Statement -> Statement
+procDef patt stmt = Definition patt $ Proc stmt
 
 data Pattern = Pattern String [(String, Type)]
     deriving (Show, Eq, Ord)
 
 data Type = Top | Bottom
+          | BoolT | IntT | FracT
+          | FuncT Type Type
     deriving (Show, Eq, Ord)
 
 data Expression = Null
@@ -26,6 +39,7 @@ data Expression = Null
                 | IntNum Integer
                 | FracNum Rational
                 | Ref String
+                | Func Pattern Expression
                 | Applic Expression [Expression]
                 | IfElse Expression Expression Expression -- if condition then expr else expr
                 | Prefix PreOp Expression

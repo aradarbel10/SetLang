@@ -1,6 +1,5 @@
 -- single line comments
--/ multi
-     line
+-/ multi-line
        comments /-
 NOP -- dummy statement
 
@@ -8,34 +7,45 @@ NOP -- dummy statement
 print 1 + 2
 print (1 = 1)
 print false = (true /= false)
-print (1 < 100)
-    /= (20 < 6)
+print (1 < 100) /= (20 < 6)
 
--- group values in sets --
-print ∅
+-- rastor sets --
 print {}
 print {1, 2, 3}
 print {∅, 1, 2, 3, 3, 4, {100 < 200}, ∅}
 
--- define/assign variables --
-def var := 321
+-- assign variables --
+var <- 321
 print var
 var <- 123
 print var
-var <- 666
 
 -- define procedures and execute them --
-def printNum := proc
+proc printNum:
     favNum <- var
     print favNum
 
 printNum
-printNum
-printNum
 
 -- definitions with parameters --
-def multiply factor := 73 * factor
+func multiply factor := 73 * factor
 
 print multiply 1
 print multiply 2
 print multiply 10
+
+-- aliasing & partial application --
+func multiply_ := multiply
+print multiply_ 11
+
+func sumThree a b c := a + b + c
+sumThree_ <- sumThree
+sumTwoAnd5 <- sumThree 5
+func addTwelve c := sumTwoAnd5 7 c
+addTwelve_ <- sumTwoAnd5 7
+
+print sumThree 5 7 2
+print sumThree_ 5 7 2
+print sumTwoAnd5 7 2
+print addTwelve 2
+print addTwelve_ 2

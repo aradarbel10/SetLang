@@ -28,7 +28,7 @@ lexer = P.makeTokenParser $ P.LanguageDef {
     P.opStart = oneOf "!@#$%^&*()-=+{}[]/.,<>;:∅",
     P.opLetter = oneOf "!@#$%^&*()-=+{}[]/.,<>;:∅",
 
-    P.reservedNames = ["print", "NOP", "true", "false", "proc", "def", "∅"],
+    P.reservedNames = ["print", "NOP", "true", "false", "proc", "func", "∅"],
     P.reservedOpNames = [":=", "<-", "{", "}", ","],
 
     P.caseSensitive = True
@@ -102,7 +102,6 @@ termParser =    (IntNum <$> natural)
             <|> (reserved "false" $> BoolVal False)
             <|> (Ref <$> identifier)
             <|> setLiteralParser
-            <|> procParser
             <|> parens expressionParser
 
 statementParser :: Parser Statement
@@ -121,11 +120,10 @@ patternParser = try $ do
     (name:params) <- many1 identifier
     return $ Pattern name $ zip params (repeat Top)
 
-procParser :: Parser Expression
-procParser = reserved "proc" >> Proc <$> (indented >> blockParser)
-
 assignParser :: Parser Statement
 assignParser = try (Assign <$> (patternParser <* reservedOp "<-") <*> expressionParser)
 
 definitionParser :: Parser Statement
-definitionParser = try (Definition <$> (reserved "def" >> patternParser <* reservedOp ":=") <*> expressionParser)
+definitionParser =
+        try (funcDef <$> (reserved "func" >> patternParser <* reservedOp ":=") <*> expressionParser)
+    <|>     (procDef <$> (reserved "proc" >> patternParser <* reservedOp ":" ) <*> (indented >> blockParser))

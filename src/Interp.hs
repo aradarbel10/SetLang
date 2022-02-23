@@ -11,12 +11,14 @@ import Data.List
 import Data.Maybe
 import qualified Data.Set as S
 
-type Scope = M.Map Pattern Expression
-type Scopes = [Scope];
-data Context = Context {
-                        names :: Scopes,
-                        stdout :: String
-                       }
+import Debug.Trace
+debug = flip trace
+
+appendScope :: Context -> Scope -> Context
+appendScope c scope = Context {
+    names = scope : names c,
+    stdout = stdout c
+}
 
 patternName :: Pattern -> String
 patternName (Pattern n _) = n
@@ -49,14 +51,23 @@ lookupInScopes (s:ss) name =
         Nothing -> lookupInScopes ss name
         Just exp -> Just exp
 
-scopeParams :: [Expression] -> [(String, Type)] -> Maybe Scope
-scopeParams [] [] = Just M.empty
-scopeParams [] _  = Nothing
-scopeParams _  [] = Nothing
-scopeParams (exp:exps) ((name, typ):params) = M.insert (Pattern name []) exp <$> scopeParams exps params
+data Application = Bad
+                 | Full Scope
+                 | Partial Integer
 
-applyOn :: Scope -> Expression -> Expression
-applyOn scope = evaluate (Context { names = [scope], stdout = "" })
+tryApplyParams :: [Expression] -> [(String, Type)] -> Application
+tryApplyParams [] [] = Full M.empty
+tryApplyParams [] left = Partial $ toInteger $ length left
+tryApplyParams _ [] = Bad
+tryApplyParams (exp:exps) ((name, typ):params) =
+    let scope = tryApplyParams exps params in
+    case scope of
+        Bad -> Bad
+        Full scope -> Full $ M.insert (Pattern name []) exp scope
+        Partial i -> Partial i
+
+applyOn :: Scopes -> Expression -> Expression
+applyOn scopes = evaluate (Context { names = scopes, stdout = "" })
 
 tostring :: Expression -> String
 tostring Null = "∅"
@@ -91,7 +102,7 @@ interpret c (Assign p e) =
 interpret c (Print e) =
     Context {
         names = names c,
-        stdout = stdout c ++ tostring (evaluate c e) ++ "\n"  -- TODO what if evaluating changes the context?
+        stdout = stdout (execute c e) ++ tostring (evaluate c e) ++ "\n"  -- TODO what if evaluating changes the context?
     }
 interpret c (Exec exp) = execute c (evaluate c exp)
 interpret _ _ = error "not implemented"
@@ -132,27 +143,28 @@ evaluate c (Infix op a b) = case (op, evaluate c a, evaluate c b) of
 
     (_, _, _) -> error "type error" -- TODO better type errors
 evaluate c (Set s) = Set $ S.map (evaluate c) s
-evaluate c (Applic (Ref name) ps) =
-    case lookupInScopes (names c) name of
-        Nothing -> error $ "undefined " ++ name
-        Just (Pattern name' params, body) -> case scopeParams (map (evaluate c) ps) params of
-            Nothing -> error "bad application"
-            Just scope -> applyOn scope body
-evaluate c (Applic _ _) = error "cant apply on non callable"
+
+evaluate c (Applic (Applic func curried) []) = evaluate c $ Applic func curried
+evaluate c (Applic (Applic func curried) ps) = evaluate c $ Applic func (curried ++ ps)
+evaluate c (Applic (Func patt exp) params) =
+    let (Pattern name sig) = patt in
+    case tryApplyParams (map (evaluate c) params) sig of
+        Bad -> error "bad application"
+        Partial i -> Applic (Applic (Func patt exp) params) []
+        Full scope -> applyOn (scope : names c) exp
+evaluate c (Applic func ps) = evaluate c $ Applic (evaluate c func) ps
+
 evaluate c (Ref name) = case lookupInScopes (names c) name of
     Nothing -> error $ "undefined name " ++ show name
-    Just (_, expr) -> evaluate c expr
+    Just (patt, expr) -> case patt of
+        Pattern _ [] -> evaluate c expr
+        Pattern _ ps -> Func patt expr
 evaluate c e = e
 
 execute :: Context -> Expression -> Context
 execute c (Proc stmt) = interpret c stmt
-execute c (Applic (Ref name) ps) =
-    case lookupInScopes (names c) name of
-        Nothing -> error $ "undefined " ++ name
-        Just (Pattern name' params, body) -> case scopeParams (map (evaluate c) ps) params of
-            Nothing -> error "bad application"
-            Just scope -> error $ "debug: " ++ show body--execute (Context { names = scope:names c, stdout = stdout c }) body
-execute c (Applic _ _) = error "cant apply on non callable"
+execute c (Applic _ _) = c
+--execute c (Applic _ _) = error "cant apply on non callable"
 execute c _ = c
 
 interpretFull :: Statement -> String
