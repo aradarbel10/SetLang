@@ -113,7 +113,7 @@ statementParser =
     <|> (reserved "NOP" $> Nop)
 
 blockParser :: Parser Statement
-blockParser = block statementParser <&> Block
+blockParser = block statementParser <&> Block -- TODO if only one statement dont wrap it in a block
 
 patternParser :: Parser Pattern
 patternParser = try $ do

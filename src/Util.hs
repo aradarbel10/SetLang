@@ -10,3 +10,6 @@ orElse (Just a) _ = a
 
 takeEnd :: Integer -> [a] -> [a]
 takeEnd n = reverse . take (fromInteger n) . reverse
+
+(!) :: a -> b -> (a, b)
+(!) x y = (x, y)

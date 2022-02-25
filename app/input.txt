@@ -2,7 +2,7 @@
 -/ multi-line
        comments /-
 NOP -- dummy statement
-
+-/
 -- numbers, booleans, comparisons --
 print 1 + 2
 print (1 = 1)
@@ -12,7 +12,7 @@ print (1 < 100) /= (20 < 6)
 -- rastor sets --
 print {}
 print {1, 2, 3}
-print {∅, 1, 2, 3, 3, 4, {100 < 200}, ∅}
+print {∅, 1, 2, 3, 2 + 1, 4, {100 < 200}, ∅}
 
 -- assign variables --
 var <- 321
@@ -37,9 +37,10 @@ print multiply 10
 -- aliasing & partial application --
 func multiply_ := multiply
 print multiply_ 11
+/-
 
 func sumThree a b c := a + b + c
-sumThree_ <- sumThree
+func sumThree_ := sumThree
 sumTwoAnd5 <- sumThree 5
 func addTwelve c := sumTwoAnd5 7 c
 addTwelve_ <- sumTwoAnd5 7
@@ -49,3 +50,12 @@ print sumThree_ 5 7 2
 print sumTwoAnd5 7 2
 print addTwelve 2
 print addTwelve_ 2
+-/
+proc sumTwo a b:
+    print a + b
+proc addSix:
+    sumTwo 6
+
+--sumTwo 6 3
+addSix 3
+/-

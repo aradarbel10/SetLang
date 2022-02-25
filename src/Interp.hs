@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 module Interp where
 
 import Parser
@@ -5,20 +6,37 @@ import AST
 import Util
 
 import qualified Data.Map.Strict as M
-import Data.Ratio
+import Data.Ratio ( (%), denominator, numerator )
 import Data.Char
 import Data.List
 import Data.Maybe
 import qualified Data.Set as S
+import Control.Monad.State.Lazy
+import Data.Functor
 
 import Debug.Trace
 debug = flip trace
 
-appendScope :: Context -> Scope -> Context
-appendScope c scope = Context {
-    names = scope : names c,
-    stdout = stdout c
+reContext :: (Scopes -> Scopes) -> (String -> String) -> State Context ()
+reContext fnames fstdout = state $ \c -> () ! Context {
+    names = fnames $ names c,
+    stdout = fstdout $ stdout c
 }
+
+getNames :: State Context Scopes
+getNames = state $ \c -> (names c, c)
+
+getStdout :: State Context String
+getStdout = state $ \c -> (stdout c, c)
+
+putNames :: Scopes -> State Context ()
+putNames ns = state $ \c -> () ! Context { names = ns, stdout = stdout c }
+
+appendScope :: Scope -> State Context ()
+appendScope scope = reContext (M.empty:) id
+
+
+
 
 patternName :: Pattern -> String
 patternName (Pattern n _) = n
@@ -37,7 +55,7 @@ assignInScopes (s:ss) name e =
     case assignInScopeList (M.toAscList s) name e of
         Nothing -> (s:) <$> assignInScopes ss name e
         Just pairs -> Just $ M.fromAscList pairs : ss
-        
+
 lookupInScopeList :: [(Pattern, Expression)] -> String -> Maybe (Pattern, Expression)
 lookupInScopeList [] _ = Nothing
 lookupInScopeList ((patt, exp):rest) name
@@ -66,9 +84,14 @@ tryApplyParams (exp:exps) ((name, typ):params) =
         Full scope -> Full $ M.insert (Pattern name []) exp scope
         Partial i -> Partial i
 
-applyOn :: Scopes -> Expression -> Expression
-applyOn scopes = evaluate (Context { names = scopes, stdout = "" })
-
+applyOn :: Scopes -> Expression -> State Context Expression
+applyOn names e = do
+    names' <- getNames
+    putNames names
+    res <- evaluate e
+    putNames names'
+    return res
+    
 tostring :: Expression -> String
 tostring Null = "∅"
 tostring (IntNum n) = show n
@@ -79,96 +102,133 @@ tostring (Set s) = concat ["{",
 tostring (Ref name) = "varname " ++ name
 tostring e = show e
 
-interpret :: Context -> Statement -> Context
-interpret c Nop = c
-interpret c (Block stmts) =
-            let c' = Context {
-                names = M.empty : names c,
-                stdout = stdout c
-            }
-            in foldl interpret c' stmts
-interpret c (Definition p e)
-    | null (names c) = error "no scope"
-    | M.member p (head $ names c) = error "double definition"
-    | otherwise = Context {
-                      names = mapHead (M.insert p e) (names c),
-                      stdout = stdout c
-                  }
-interpret c (Assign p e) =
-    case assignInScopes (names c) (patternName p) e of
-        Nothing -> Context { names = mapHead (M.insert p e) (names c),
-                             stdout = stdout c }
-        Just names' -> Context { names = names', stdout = stdout c }
-interpret c (Print e) =
-    Context {
-        names = names c,
-        stdout = stdout (execute c e) ++ tostring (evaluate c e) ++ "\n"  -- TODO what if evaluating changes the context?
-    }
-interpret c (Exec exp) = execute c (evaluate c exp)
-interpret _ _ = error "not implemented"
+interpret :: Statement -> State Context ()
+interpret Nop =
+    return ()
+interpret (Block []) =
+    return ()
+interpret (Block (stmt:rest)) = do
+    appendScope M.empty
+    interpret stmt
+    interpret $ Block rest
+interpret (Definition p e) = do
+    ns <- getNames
+    if null ns
+        then error "no scope"
+        else if M.member p (head ns) -- TODO use proper lookup to check for duplicates
+            then error "double definition"
+            else reContext (mapHead (M.insert p e)) id
+interpret (Assign p e) = do
+    ns <- getNames
+    res <- evaluate e
+    case assignInScopes ns (patternName p) Null of
+        Nothing -> reContext (mapHead (M.insert p res)) id
+        Just ns' -> putNames ns'
+interpret (Print e) = do
+    val <- evaluate e
+    reContext id (++ "\n" ++ tostring val)
+interpret (Exec e) = do
+    evaluate e
+    return ()
+interpret _ = error "not implemented"
 
-evaluate :: Context -> Expression -> Expression
-evaluate c Null = Null
-evaluate c (IntNum n) = IntNum n
-evaluate c (FracNum n) = if denominator n == 1 then IntNum $ numerator n
-                                               else FracNum n
-evaluate c (Prefix op e) = case (op, evaluate c e) of
-    (Minus, IntNum n) -> IntNum (-n)
-    (Plus, IntNum n) -> IntNum n
 
-    (Empty, Null) -> BoolVal True
-    (Empty, Set set) -> BoolVal $ null set
-    (Even, IntNum n) -> BoolVal . even $ n
-    (Odd, IntNum n) -> BoolVal . odd $ n
-    (Neg, IntNum n) -> BoolVal (n < 0)
-    (Neg, BoolVal b) -> BoolVal $ not b
-    (_, _) -> error "type error" -- TODO better type errors
-evaluate c (Infix op a b) = case (op, evaluate c a, evaluate c b) of
-    (Add, IntNum a, IntNum b) -> IntNum (a + b)
-    (Sub, IntNum a, IntNum b) -> IntNum (a - b)
-    (Mul, IntNum a, IntNum b) -> IntNum (a * b)
-    (Div, IntNum a, IntNum b) -> FracNum (a % b)
+evaluate :: Expression -> State Context Expression
+evaluate Null = return Null
+evaluate (IntNum n) = return $ IntNum n
+evaluate (FracNum n) = return $
+    if denominator n == 1
+        then IntNum $ numerator n
+        else FracNum n
+evaluate (Prefix op e) = do
+    e' <- evaluate e
+    return $ case (op, e') of
+        (Minus, IntNum n) -> IntNum (-n)
+        (Plus, IntNum n) -> IntNum n
 
-    (Equals, IntNum a, IntNum b) -> BoolVal $ a == b
-    (Equals, FracNum a, FracNum b) -> BoolVal $ a == b
-    (Equals, IntNum a, FracNum b) -> BoolVal False
-    (Equals, FracNum a, IntNum b) -> BoolVal False
-    (Equals, BoolVal a, BoolVal b) -> BoolVal $ a == b
+        (Empty, Null) -> BoolVal True
+        (Empty, Set set) -> BoolVal $ null set
+        (Even, IntNum n) -> BoolVal . even $ n
+        (Odd, IntNum n) -> BoolVal . odd $ n
+        (Neg, IntNum n) -> BoolVal (n < 0)
+        (Neg, BoolVal b) -> BoolVal $ not b
+        (_, _) -> error "type error" -- TODO better type errors
+evaluate (Infix op a b) = do
+    lhs <- evaluate a
+    rhs <- evaluate b
+    if op == NEquals
+        then evaluate (Prefix Neg $ Infix Equals lhs rhs)
+        else return $ case (op, lhs, rhs) of
+            (Add, IntNum a, IntNum b) -> IntNum (a + b)
+            (Sub, IntNum a, IntNum b) -> IntNum (a - b)
+            (Mul, IntNum a, IntNum b) -> IntNum (a * b)
+            (Div, IntNum a, IntNum b) -> FracNum (a % b)
 
-    (NEquals, a, b) -> evaluate c (Prefix Neg $ Infix Equals a b)
-    (Less, IntNum a, IntNum b) -> BoolVal $ a < b
-    (Less, FracNum a, FracNum b) -> BoolVal $ a < b
-    (Less, IntNum a, FracNum b) -> BoolVal $ (a % 1) < b
-    (Less, FracNum a, IntNum b) -> BoolVal $ a < (b % 1)
+            (Equals, IntNum a, IntNum b) -> BoolVal $ a == b
+            (Equals, FracNum a, FracNum b) -> BoolVal $ a == b
+            (Equals, IntNum a, FracNum b) -> BoolVal False
+            (Equals, FracNum a, IntNum b) -> BoolVal False
+            (Equals, BoolVal a, BoolVal b) -> BoolVal $ a == b
 
-    (_, _, _) -> error "type error" -- TODO better type errors
-evaluate c (Set s) = Set $ S.map (evaluate c) s
+            (Less, IntNum a, IntNum b) -> BoolVal $ a < b
+            (Less, FracNum a, FracNum b) -> BoolVal $ a < b
+            (Less, IntNum a, FracNum b) -> BoolVal $ (a % 1) < b
+            (Less, FracNum a, IntNum b) -> BoolVal $ a < (b % 1)
 
-evaluate c (Applic (Applic func curried) []) = evaluate c $ Applic func curried
-evaluate c (Applic (Applic func curried) ps) = evaluate c $ Applic func (curried ++ ps)
-evaluate c (Applic (Func patt exp) params) =
-    let (Pattern name sig) = patt in
-    case tryApplyParams (map (evaluate c) params) sig of
-        Bad -> error "bad application"
-        Partial i -> Applic (Applic (Func patt exp) params) []
-        Full scope -> applyOn (scope : names c) exp
-evaluate c (Applic func ps) = evaluate c $ Applic (evaluate c func) ps
+            (_, _, _) -> error "type error" -- TODO better type errors
+evaluate (Set s) =
+    Set <$> foldl
+        (\acc expr -> do
+            set <- acc
+            res <- evaluate expr
+            return $ S.insert res set
+        )
+        (return S.empty)
+        s
 
-evaluate c (Ref name) = case lookupInScopes (names c) name of
-    Nothing -> error $ "undefined name " ++ show name
-    Just (patt, expr) -> case patt of
-        Pattern _ [] -> evaluate c expr
-        Pattern _ ps -> Func patt expr
-evaluate c e = e
+evaluate (Applic (Applic func curried) []) =
+    evaluate $ Applic func curried
+evaluate (Applic (Applic func curried) ps) =
+    evaluate $ Applic func (curried ++ ps)
+evaluate (Applic (Func patt exp) params) =
+    let (Pattern name sig) = patt
+        es = foldl
+            (\acc expr -> do
+                ps <- acc
+                res <- evaluate expr
+                return $ res:ps
+            )
+            (return [])
+            params
+    in do
+        app <- es <&> \ps -> tryApplyParams ps sig
+        case app of
+            Bad -> error "bad application"
+            Partial i -> return $ Applic (Applic (Func patt exp) params) []
+            Full scope -> do
+                ns <- getNames
+                applyOn (scope:ns) exp
+evaluate (Applic Null _) = error "cant apply on Null"
+evaluate (Applic func ps) = do
+    func' <- evaluate func
+    evaluate $ Applic func' ps
 
-execute :: Context -> Expression -> Context
-execute c (Proc stmt) = interpret c stmt
-execute c (Applic _ _) = c
---execute c (Applic _ _) = error "cant apply on non callable"
-execute c _ = c
+evaluate (Proc stmt) = do
+    res <- interpret stmt
+    return Null
+
+evaluate (Ref name) = do
+    ns <- getNames
+    case lookupInScopes ns name of
+        Nothing -> error $ "undefined name " ++ show name
+        Just (patt, expr) ->
+            case patt of
+                Pattern _ [] -> return expr
+                Pattern _ ps -> return $ Func patt expr
+evaluate e = return e
 
 interpretFull :: Statement -> String
-interpretFull = stdout . interpret Context { names = [], stdout = "" }
+interpretFull stmt = stdout $ execState (interpret stmt) Context { names = [], stdout = "" }
 
 run :: String -> String
 run = interpretFull . parse

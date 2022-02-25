@@ -3,13 +3,14 @@ module AST where
 import qualified Data.Set as S
 import qualified Data.Map as M
 
+
 type Scope = M.Map Pattern Expression
 type Scopes = [Scope];
 data Context = Context {
                         names :: Scopes,
                         stdout :: String
                        }
-
+    deriving (Show)
 
 data Statement = Nop
                | Block [Statement]
