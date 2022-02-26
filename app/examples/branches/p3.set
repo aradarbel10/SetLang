@@ -1,0 +1,6 @@
+-- problem 3 --
+write "enter a number: "
+num <- read
+if num < 0:
+    write "negative "
+    writeln (-num)

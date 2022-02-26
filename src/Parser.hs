@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-module Parser(Parser.parse) where
+{-# HLINT ignore "Use <$>" #-}
+module Parser where
 
 import AST
 
@@ -28,8 +29,14 @@ lexer = P.makeTokenParser $ P.LanguageDef {
     P.opStart = oneOf "!@#$%^&*()-=+{}[]/.,<>;:∅",
     P.opLetter = oneOf "!@#$%^&*()-=+{}[]/.,<>;:∅",
 
-    P.reservedNames = ["print", "NOP", "true", "false", "proc", "func", "∅"],
-    P.reservedOpNames = [":=", "<-", "{", "}", ","],
+    P.reservedNames = ["NOP", "ECHO", "∅",
+                      "true", "false",
+                      "proc", "func",
+                      "and", "or",
+                      
+                      "if", "then", "else"],
+    P.reservedOpNames = [":=", "<-", "{", "}", ",",
+                        "≠", "≥", "≤"],
 
     P.caseSensitive = True
 }
@@ -38,6 +45,7 @@ symbol = P.symbol lexer
 integer = P.integer lexer
 natural = P.natural lexer
 identifier = P.identifier lexer
+stringLiteral = P.stringLiteral lexer
 parens = P.parens lexer
 braces = P.braces lexer
 reserved = P.reserved lexer
@@ -62,8 +70,15 @@ opsTable = [
                     E.Infix (reservedOp "-" $> Infix Sub) E.AssocLeft
                 ],[
                     E.Infix (reservedOp "=" $> Infix Equals) E.AssocNone,
-                    E.Infix (reservedOp "/=" $> Infix NEquals) E.AssocNone,
-                    E.Infix (reservedOp "<" $> Infix Less) E.AssocNone
+                    E.Infix ((reservedOp "/=" <|> reservedOp "≠")$> Infix NEquals) E.AssocNone,
+                    E.Infix (reservedOp "<" $> Infix Less) E.AssocNone,
+                    E.Infix (reservedOp ">" $> Infix Greater) E.AssocNone,
+                    E.Infix ((reservedOp "<=" <|> reservedOp "≤") $> Infix LessEq) E.AssocNone,
+                    E.Infix ((reservedOp ">=" <|> reservedOp "≥") $> Infix GreaterEq) E.AssocNone
+                ],[
+                    E.Infix (reserved "and" $> Infix BAnd) E.AssocLeft
+                ],[
+                    E.Infix (reserved "or" $> Infix BOr) E.AssocLeft
                 ]
            ]
 
@@ -74,7 +89,7 @@ runParser p str = case runIndentParser p () "" str of
     Right val -> val
 
 parse :: String -> Statement
-parse = Parser.runParser (P.whiteSpace lexer >> topLevel >> (block statementParser <&> Block))
+parse = Parser.runParser (P.whiteSpace lexer >> blockParser)
 
 setLiteralParser :: Parser Expression
 setLiteralParser = (reserved "∅" $> Null) <|> do
@@ -82,38 +97,63 @@ setLiteralParser = (reserved "∅" $> Null) <|> do
     return $
         if null es then Null else Set (S.fromList es)
 
-printParser :: Parser Statement
-printParser = reserved "print" >> expressionParser <&> Print
-
 expressionParser :: Parser Expression
-expressionParser = E.buildExpressionParser opsTable termsParser
+expressionParser = E.buildExpressionParser opsTable
+    (termsParser <&> \(t:ts) -> case ts of
+                    [] -> t
+                    _ -> Applic t ts)
 
-termsParser :: Parser Expression
-termsParser = do
-                  t <- termParser
-                  ts <- many (try $ indented >> (termParser <* notFollowedBy (reservedOp "<-")))
-                  return $ case ts of
-                      [] -> t
-                      ts -> Applic t ts
+termsParser :: Parser [Expression]
+termsParser = try $ do
+    t <- withPos termParser
+    ts <- many $ sameOrIndented >> termParser
+    return (t:ts)
          
 termParser :: Parser Expression
-termParser =    (IntNum <$> natural)
-            <|> (reserved "true" $> BoolVal True)
-            <|> (reserved "false" $> BoolVal False)
-            <|> (Ref <$> identifier)
-            <|> setLiteralParser
-            <|> parens expressionParser
+termParser =    try (IntNum <$> natural)
+            <|> try (reserved "true" $> BoolVal True)
+            <|> try (reserved "false" $> BoolVal False)
+            <|> try (Ref <$> identifier)
+            <|> try (StrVal <$> stringLiteral)
+            <|> try setLiteralParser
+            <|> try ifThenElseParser
+            <|>     parens expressionParser
 
 statementParser :: Parser Statement
 statementParser =
-    try (Exec <$> (expressionParser <* notFollowedBy (reservedOp "<-")))
-    <|> assignParser
-    <|> definitionParser
-    <|> printParser
-    <|> (reserved "NOP" $> Nop)
+        try (Exec <$> (expressionParser <* notFollowedBy (reservedOp "<-")))
+    <|> try ifStatementParser
+    <|> try assignParser
+    <|> try definitionParser
+    <|> try (reserved "NOP" $> Nop)
+    <|> try (reserved "ECHO" $> Echo)
 
 blockParser :: Parser Statement
-blockParser = block statementParser <&> Block -- TODO if only one statement dont wrap it in a block
+blockParser = withPos $ block statementParser <&> Block
+
+ifThenElseParser :: Parser Expression
+ifThenElseParser = try $ do
+    reserved "if"
+    cond <- expressionParser
+    reserved "then"
+    trueBranch <- expressionParser
+    reserved "else"
+    falseBranch <- expressionParser
+    return $ IfThenElse cond trueBranch falseBranch
+
+ifStatementParser :: Parser Statement
+ifStatementParser = try $ do
+    withPos $ reserved "if"
+    cond <- expressionParser
+    reservedOp ":"
+    trueBranch <- indented >> blockParser
+    falseBranch <- optionMaybe $ do
+        --checkIndent
+        reserved "else"
+        (do
+            reservedOp ":"
+            indented >> blockParser) <|> ifStatementParser
+    return $ IfStatement cond trueBranch falseBranch
 
 patternParser :: Parser Pattern
 patternParser = try $ do

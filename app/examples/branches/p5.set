@@ -1,0 +1,10 @@
+-- problem 5 --
+writeln "enter three numbers:"
+a <- read
+b <- read
+c <- read
+
+if (c - b = b - a) or (b - c = c - a) or (b - a = a - c):
+    writeln "arithmetic sequence!"
+else:
+    writeln "no arithmetic sequence..."

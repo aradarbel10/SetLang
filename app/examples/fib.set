@@ -1,0 +1,11 @@
+func fib n :=
+    if n <= 1
+    then n
+    else fib (n - 1) + fib (n - 2)
+
+k <- 30
+
+write "fib("
+write k
+write ") = "
+write (fib k)

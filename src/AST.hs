@@ -3,21 +3,17 @@ module AST where
 import qualified Data.Set as S
 import qualified Data.Map as M
 
-
 type Scope = M.Map Pattern Expression
 type Scopes = [Scope];
-data Context = Context {
-                        names :: Scopes,
-                        stdout :: String
-                       }
+newtype Context = Context { names :: Scopes }
     deriving (Show)
 
-data Statement = Nop
+data Statement = Nop | Echo
                | Block [Statement]
                | Definition Pattern Expression
                | Assign Pattern Expression
                | Exec Expression
-               | Print Expression
+               | IfStatement Expression Statement (Maybe Statement)
     deriving (Show, Eq, Ord)
 
 funcDef :: Pattern -> Expression -> Statement
@@ -36,22 +32,29 @@ data Type = Top | Bottom
 
 data Expression = Null
                 | BoolVal Bool
+                | StrVal String
                 | Set (S.Set Expression)
                 | IntNum Integer
                 | FracNum Rational
                 | Ref String
                 | Func Pattern Expression
                 | Applic Expression [Expression]
-                | IfElse Expression Expression Expression -- if condition then expr else expr
+                | IfThenElse Expression Expression Expression
                 | Prefix PreOp Expression
                 | Infix BinOp Expression Expression
                 | Proc Statement
     deriving (Show, Eq, Ord)
+
+isProc :: Expression -> Bool
+isProc (Proc _) = True
+isProc _ = False
 
 data PreOp = Empty | Even | Odd | Neg
            | Minus | Plus
     deriving (Show, Enum, Eq, Ord)
 
 data BinOp = Add | Sub | Mul | Div
-           | Equals | NEquals | Less
+           | Equals | NEquals
+           | Less | Greater | LessEq | GreaterEq
+           | BAnd | BOr
     deriving (Show, Enum, Eq, Ord)

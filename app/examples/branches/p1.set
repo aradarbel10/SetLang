@@ -1,0 +1,12 @@
+-- problem 1 --
+write "do you have a degree (true/false)? "
+has_degree <- read
+write "how many years of experience do you have? "
+experience <- read
+write "what is your age? "
+age <- read
+
+writeln (has_degree
+         and experience ≥ 3
+         and age ≥ 35
+         and age ≤ 45)
