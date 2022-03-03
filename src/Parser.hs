@@ -36,7 +36,8 @@ lexer = P.makeTokenParser $ P.LanguageDef {
                       
                       "if", "then", "else"],
     P.reservedOpNames = [":=", "<-", "{", "}", ",",
-                        "≠", "≥", "≤"],
+                        "≠", "≥", "≤",
+                        "∩", "∪", "\\", "Δ", "::"],
 
     P.caseSensitive = True
 }
@@ -69,6 +70,13 @@ opsTable = [
                     E.Infix (reservedOp "+" $> Infix Add) E.AssocLeft,
                     E.Infix (reservedOp "-" $> Infix Sub) E.AssocLeft
                 ],[
+                    E.Infix (reservedOp "∩" $> Infix Intersect) E.AssocLeft,
+                    E.Infix (reservedOp "∪" $> Infix Union) E.AssocLeft,
+                    E.Infix (reservedOp "\\" $> Infix Diff) E.AssocLeft,
+                    E.Infix (reservedOp "Δ" $> Infix Symdiff) E.AssocLeft
+                ],[
+                    E.Infix (reservedOp "::" $> Infix Member) E.AssocNone
+                ],[
                     E.Infix (reservedOp "=" $> Infix Equals) E.AssocNone,
                     E.Infix ((reservedOp "/=" <|> reservedOp "≠")$> Infix NEquals) E.AssocNone,
                     E.Infix (reservedOp "<" $> Infix Less) E.AssocNone,
@@ -92,10 +100,10 @@ parse :: String -> Statement
 parse = Parser.runParser (P.whiteSpace lexer >> blockParser)
 
 setLiteralParser :: Parser Expression
-setLiteralParser = (reserved "∅" $> Null) <|> do
+setLiteralParser = (reserved "∅" $> EmptySet) <|> do
     es <- braces $ sepBy expressionParser (reservedOp ",")
     return $
-        if null es then Null else Set (S.fromList es)
+        if null es then EmptySet else RastorSet (S.fromList es)
 
 expressionParser :: Parser Expression
 expressionParser = E.buildExpressionParser opsTable

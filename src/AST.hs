@@ -30,10 +30,10 @@ data Type = Top | Bottom
           | FuncT Type Type
     deriving (Show, Eq, Ord)
 
-data Expression = Null
+data Expression = EmptySet | Any | Nats | Ints | Reals | Ratios | Sets
+                | RastorSet (S.Set Expression)
                 | BoolVal Bool
                 | StrVal String
-                | Set (S.Set Expression)
                 | IntNum Integer
                 | FracNum Rational
                 | Ref String
@@ -56,5 +56,6 @@ data PreOp = Empty | Even | Odd | Neg
 data BinOp = Add | Sub | Mul | Div
            | Equals | NEquals
            | Less | Greater | LessEq | GreaterEq
-           | BAnd | BOr
+           | BAnd | BOr | Member
+           | Union | Intersect | Diff | Symdiff
     deriving (Show, Enum, Eq, Ord)

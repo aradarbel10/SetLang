@@ -3,6 +3,7 @@ module Interp where
 import Parser
 import AST
 import Util
+import qualified Mather as TH
 
 import qualified Data.Map.Strict as M
 import Data.Ratio ( (%), denominator, numerator )
@@ -98,10 +99,10 @@ applyOn names e = do
     return res
 
 tostring :: Expression -> String
-tostring Null = "∅"
+tostring EmptySet = "∅"
 tostring (IntNum n) = show n
 tostring (BoolVal b) = map toLower $ show b
-tostring (Set s) = concat ["{",
+tostring (RastorSet s) = concat ["{",
                            intercalate ", " $ map tostring $ S.toList s,
                            "}"]
 tostring (Ref name) = "varname " ++ name
@@ -132,7 +133,7 @@ interpret (Definition p e) = do
 interpret (Assign p e) = do
     ns <- getNames
     res <- evaluate e
-    case assignInScopes ns (patternName p) Null of
+    case assignInScopes ns (patternName p) EmptySet of
         Nothing -> reContext (mapHead (M.insert p res))
         Just ns' -> putNames ns'
 interpret (Exec e) = do
@@ -149,7 +150,7 @@ interpret _ = error "not implemented"
 
 
 evaluate :: Expression -> StateT Context IO Expression
-evaluate Null = return Null
+evaluate EmptySet = return EmptySet
 evaluate (IntNum n) = return $ IntNum n
 evaluate (FracNum n) = return $
     if denominator n == 1
@@ -162,11 +163,11 @@ evaluate (Ref "read") = do
 evaluate (Applic (Ref "write") [arg]) = do
     expr <- evaluate arg
     liftIO $ putStr (tostring expr) >> hFlush stdout
-    return Null
+    return EmptySet
 evaluate (Applic (Ref "writeln") [arg]) = do
     evaluate (Applic (Ref "write") [arg])
     liftIO $ putStrLn ""
-    return Null
+    return EmptySet
 
 evaluate (Prefix op e) = do
     e' <- evaluate e
@@ -174,8 +175,8 @@ evaluate (Prefix op e) = do
         (Minus, IntNum n) -> IntNum (-n)
         (Plus, IntNum n) -> IntNum n
 
-        (Empty, Null) -> BoolVal True
-        (Empty, Set set) -> BoolVal $ null set
+        (Empty, EmptySet) -> BoolVal True
+        (Empty, RastorSet set) -> BoolVal $ null set
         (Even, IntNum n) -> BoolVal . even $ n
         (Odd, IntNum n) -> BoolVal . odd $ n
         (Neg, IntNum n) -> BoolVal (n < 0)
@@ -221,9 +222,9 @@ evaluate (Infix op a b) = do
             (GreaterEq, IntNum a, FracNum b) -> BoolVal $ (a % 1) >= b
             (GreaterEq, FracNum a, IntNum b) -> BoolVal $ a >= (b % 1)
 
-            (_, _, _) -> error "type error" -- TODO better type errors
-evaluate (Set s) =
-    Set <$> foldl
+            (_, _, _) -> Infix op lhs rhs
+evaluate (RastorSet s) =
+    RastorSet <$> foldl
         (\acc expr -> do
             set <- acc
             res <- evaluate expr
@@ -254,14 +255,14 @@ evaluate (Applic (Func patt exp) params) =
             Full scope -> do
                 ns <- getNames
                 applyOn (scope:ns) exp
-evaluate (Applic Null _) = error "cant apply on Null"
+evaluate (Applic EmptySet _) = error "cant apply on Null"
 evaluate (Applic func ps) = do
     func' <- evaluate func
     evaluate $ Applic func' ps
 
 evaluate (Proc stmt) = do
     res <- interpret stmt
-    return Null
+    return EmptySet
 evaluate (Ref name) = do
     ns <- getNames
     case lookupInScopes ns name of
