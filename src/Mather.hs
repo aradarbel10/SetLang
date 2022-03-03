@@ -54,15 +54,27 @@ isOr :: Expr -> Bool
 isOr (Or _) = True
 isOr _ = False
 
-{-
-(and
-    (or (not r)
-        (and (not p) (not s))))
 
-(and
-    (or (not p) (not r))
-    (or (not s) (not r)))
--}
+data Literal a = Literal { atom :: a, pos :: Bool, neg :: Bool }
+    deriving (Read, Show, Eq, Ord)
+type Clause a = S.Set (Literal a)
+type CNF a = S.Set (Clause a)
+
+toLiteral :: Expr -> Literal String
+toLiteral expr = case expr of
+    Not (Atom s) -> Literal { atom = s, pos = False, neg = True }
+    Atom s -> Literal { atom = s, pos = True, neg = False }
+    _ -> error "non CNF"
+
+toClause :: Expr -> Clause String
+toClause expr = case expr of
+    Or ls -> S.fromList $ map toLiteral ls
+    other -> S.singleton $ toLiteral other
+
+fromList :: [[Expr]] -> CNF String
+fromList = S.fromList . map (S.fromList . map toLiteral)
+
+
 
 -- DFS for the first Atom in the expression
 findAtom :: Expr -> Maybe String
@@ -182,50 +194,19 @@ isNNF expr = toNNF expr == expr
 
 -- Conjunction Normal Form:
 -- (... or ...) and (... or ...) and ... and (... or ...)
-toCNF :: Expr -> Expr
-toCNF = distribute . toNNF
+toCNF :: Expr -> CNF String
+toCNF = exprToCNF . distribute . toNNF
 
 isCNF :: Expr -> Bool
-isCNF expr = toCNF expr == expr
+isCNF expr = (distribute . toNNF) expr == expr
 
-{-
-toCNF expr = case expr of
-    BTrue       -> BTrue
-    BFalse      -> BFalse
-    Atom name   -> Atom name
-    And es      ->
-        let es' = filter (/=BTrue) $ map toCNF es in
-        if find (==BFalse) es' /= Nothing -- AND contains a false
-            then BFalse
-            else flatten $ And es'
-    Or es       ->
-        let es' = filter (/=BFalse) $ map toCNF es in
-        if find (==BTrue) es' /= Nothing -- OR contains a true
-            then BTrue
-            else distribute $ flatten $ Or es'
-    Not expr    -> case expr of
-        BTrue  -> BFalse
-        BFalse -> BTrue
-        Atom _ -> Not expr
-        And es -> toCNF $ Or $ map (toCNF . Not) es -- de morgan
-        Or es  -> toCNF $ And $ map (toCNF . Not) es
-        Not e  -> e -- double negative
-        _ -> error "unreachable"
-    _           -> error "unreachable"
--}
 
-eliminateImplication :: Expr -> Expr
-eliminateImplication expr = case expr of
-    And es      -> And $ map eliminateImplication es
-    Or  es      -> Or  $ map eliminateImplication es
-    Not e       -> Not $ eliminateImplication e
-    e1 :=> e2   -> let e1' = eliminateImplication e1
-                       e2' = eliminateImplication e2
-                       in Or [Not e1', e2']
-    e1 :<=> e2  -> let e1' = eliminateImplication e1
-                       e2' = eliminateImplication e2
-                       in Or [And [e1', e2'], And [Not e1', Not e2']]
-    expr        -> expr -- leave as-is
+exprToCNF :: Expr -> CNF String
+exprToCNF e = case e of
+    (And es) -> S.fromList $ map toClause es
+    (Or es) -> S.singleton $ S.fromList $ map toLiteral es
+    other -> S.singleton $ S.singleton $ toLiteral other
+
 
 -- check whether a sentence holds
 holds :: Expr -> Bool
