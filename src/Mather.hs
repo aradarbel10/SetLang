@@ -1,6 +1,8 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use isNothing" #-}
 {-# HLINT ignore "Use isJust" #-}
+{-# LANGUAGE GADTs #-}
+
 module Mather where
 
 import Util
@@ -8,10 +10,12 @@ import Util
 import qualified Data.Set as S
 import qualified Data.Map as M
 import qualified Data.List as L
+import qualified Data.Graph as G
 import Data.Foldable
 
 import Debug.Trace
 import AST (Expression)
+import Data.Map (valid)
 debug = flip trace
 
 data Expr = BTrue | BFalse
@@ -40,11 +44,11 @@ instance Show Expr where
         BTrue -> "true"
         BFalse -> "false"
         Atom str -> str
-        And es -> "(and " ++ unwords (map show es) ++ ")"
-        Or  es -> "(or "  ++ unwords (map show es) ++ ")"
-        Not e -> "(not " ++ show e ++ ")"
-        e1 :=> e2 -> "(" ++ show e1 ++ " -> " ++ show e2 ++ ")"
-        e1 :<=> e2 -> "(" ++ show e1 ++ " <-> " ++ show e2 ++ ")"
+        And es -> "(" ++ unwords (L.intersperse "∧" $ map show es) ++ ")"
+        Or  es -> "("  ++ unwords (L.intersperse "∨" $ map show es) ++ ")"
+        Not e -> "¬" ++ show e
+        e1 :=> e2 -> "(" ++ show e1 ++ " ⇒  " ++ show e2 ++ ")"
+        e1 :<=> e2 -> "(" ++ show e1 ++ " ⇔ " ++ show e2 ++ ")"
 
 isAnd :: Expr -> Bool
 isAnd (And _) = True
@@ -55,23 +59,22 @@ isOr (Or _) = True
 isOr _ = False
 
 
-data Literal a = Literal { atom :: a, pos :: Bool, neg :: Bool }
-    deriving (Read, Show, Eq, Ord)
-type Clause a = S.Set (Literal a)
-type CNF a = S.Set (Clause a)
+type Literal = (String, Bool)
+type Clause = S.Set Literal
+type CNF = S.Set Clause
 
-toLiteral :: Expr -> Literal String
+toLiteral :: Expr -> Literal
 toLiteral expr = case expr of
-    Not (Atom s) -> Literal { atom = s, pos = False, neg = True }
-    Atom s -> Literal { atom = s, pos = True, neg = False }
+    Not (Atom s) -> (s, False)
+    Atom s -> (s, True)
     _ -> error "non CNF"
 
-toClause :: Expr -> Clause String
+toClause :: Expr -> Clause
 toClause expr = case expr of
     Or ls -> S.fromList $ map toLiteral ls
     other -> S.singleton $ toLiteral other
 
-fromList :: [[Expr]] -> CNF String
+fromList :: [[Expr]] -> CNF
 fromList = S.fromList . map (S.fromList . map toLiteral)
 
 
@@ -176,17 +179,19 @@ distribute expr = case expr of
 -- negation can only appear on atoms
 toNNF :: Expr -> Expr
 -- eliminate implication
-toNNF (e1 :=> e2)  = Or [Not $ toNNF e1, toNNF e2]
+toNNF (e1 :=> e2)  = Or [toNNF $ Not e1, toNNF e2]
 toNNF (e1 :<=> e2) = Or [And [toNNF e1, toNNF e2], And [Not $ toNNF e1, Not $ toNNF e2]]
 -- propagate nagation
 toNNF (Not expr) = case expr of
     BTrue  -> BTrue
     BFalse -> BFalse
     Atom _ -> Not expr
-    And es -> Or  $ map (toNNF . Not) es
-    Or es  -> And $ map (toNNF . Not) es
+    And es -> toNNF $ Or  $ map Not es
+    Or es  -> toNNF $ And $ map Not es
     Not e  -> toNNF e
-    implic -> toNNF (Not $ toNNF implic)
+    implic -> toNNF $ Not (toNNF implic)
+toNNF (And es) = And $ map toNNF es
+toNNF (Or  es) = Or  $ map toNNF es
 toNNF other = other -- leave as-is
 
 isNNF :: Expr -> Bool
@@ -194,20 +199,67 @@ isNNF expr = toNNF expr == expr
 
 -- Conjunction Normal Form:
 -- (... or ...) and (... or ...) and ... and (... or ...)
-toCNF :: Expr -> CNF String
+toCNF :: Expr -> CNF
 toCNF = exprToCNF . distribute . toNNF
 
 isCNF :: Expr -> Bool
 isCNF expr = (distribute . toNNF) expr == expr
 
 
-exprToCNF :: Expr -> CNF String
+exprToCNF :: Expr -> CNF
 exprToCNF e = case e of
     (And es) -> S.fromList $ map toClause es
     (Or es) -> S.singleton $ S.fromList $ map toLiteral es
     other -> S.singleton $ S.singleton $ toLiteral other
 
+findUnitClause :: CNF -> Maybe Literal
+findUnitClause cnf = case S.lookupMin cnf of
+    Nothing -> Nothing
+    Just clause ->
+        if S.size clause == 1
+            then S.lookupMin clause
+            else Nothing
 
--- check whether a sentence holds
-holds :: Expr -> Bool
-holds sentence = bruteForceSAT (Not sentence) == Nothing
+assignUnit :: CNF -> Literal -> CNF
+assignUnit cnf lit = S.map (S.filter ((/=) (fst lit) . fst)) $ S.filter (not . S.member lit) cnf
+
+unitPropagate :: (CNF, Solution) -> Maybe (CNF, Solution)
+unitPropagate (cnf, sol) = case findUnitClause cnf of
+    Nothing -> Nothing
+    Just (atom, sgn) -> Just (assignUnit cnf (atom, sgn),
+                              M.union sol (M.singleton atom sgn))
+
+chooseLiteral :: CNF -> Maybe Literal
+chooseLiteral cnf = S.lookupMin cnf >>= S.lookupMin
+
+pureElimination :: (CNF, Solution) -> Maybe (CNF, Solution)
+pureElimination (cnf, sol) =
+    let uni = S.unions cnf
+        pures = S.foldl (\acc (atom, sgn) ->
+            if S.member (atom, not sgn) acc
+                then S.delete (atom, not sgn) acc
+                else S.insert (atom, sgn) acc) S.empty uni
+    in if S.null pures
+        then Nothing
+        else Just (S.filter (S.null . S.intersection pures) cnf,
+                   M.union sol (M.fromList $ S.toList pures))
+
+dpllSAT' :: Solution -> CNF -> Maybe Solution
+dpllSAT' sol cnf =
+    let (reduced, newsol) = (untilNothing pureElimination . untilNothing unitPropagate) (cnf, sol)
+    in if S.null reduced
+        then Just newsol
+    else if S.member S.empty reduced
+        then Nothing
+    else case chooseLiteral reduced of
+        Nothing -> error "unreachable"
+        Just (atom, _) ->
+            case dpllSAT' (M.insert atom True newsol) (assignUnit reduced (atom, True)) of
+            Just sol' -> Just sol'
+            Nothing -> dpllSAT' (M.insert atom False newsol) (assignUnit reduced (atom, False))
+
+dpllSAT :: Expr -> Maybe Solution
+dpllSAT = dpllSAT' M.empty . toCNF
+
+provable :: Expr -> Bool
+provable = (==Nothing) . dpllSAT . Not
