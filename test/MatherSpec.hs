@@ -41,7 +41,7 @@ spec = describe "conjunctive normal form" $ do
             `shouldBe` fromList [[Atom "A"], [Atom "B", Atom "D"], [Atom "B", Atom "E"]]
 
     it "solves CNF" $ do
-        dpllSAT (fromList [
+        dpllSAT' M.empty (fromList [
                 [Not $ Atom "a",       Atom "b",       Atom "c"],
                 [      Atom "a",       Atom "c",       Atom "d"],
                 [      Atom "a",       Atom "c", Not $ Atom "d"],
@@ -51,4 +51,4 @@ spec = describe "conjunctive normal form" $ do
                 [Not $ Atom "a",       Atom "b", Not $ Atom "c"],
                 [Not $ Atom "a", Not $ Atom "b",       Atom "c"]
             ])
-            `shouldBe` Just (M.fromList [("a", True), ("b", True)])
+            `shouldBe` Just (M.fromList [("a", True), ("b", True), ("c", True), ("d", True)])

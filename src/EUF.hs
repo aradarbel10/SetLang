@@ -31,8 +31,6 @@ systemCompose = ([
         func "f" [var "x"] ./= var "x"
     ])
 
-isSat (eqs, neqs) = satisfiable eqs neqs
-
 
 makeDisjoints :: Ord a => [a] -> Disjoints a
 makeDisjoints = extendDisjoints $ Disjoints { links = M.empty, vals = M.empty }
@@ -105,8 +103,8 @@ congruentParents set expr = let index = (M.!) (vals set) expr
                                 congs = S.map (fromJust . getByIndex set) (allCongruents set index)
                             in  S.unions $ S.map (parentExprs (M.keysSet $ vals set)) congs
 
-satisfiable :: [(Expr, Expr)] -> [(Expr, Expr)] -> Bool
-satisfiable eqs neqs =
+satisfiable :: ([(Expr, Expr)], [(Expr, Expr)]) -> Bool
+satisfiable (eqs, neqs) =
     let subes = S.toList $ S.unions $ map allSubexprs (unpair eqs ++ unpair neqs)
         set = foldl addEq (makeDisjoints subes) eqs
     in not $ any (checkEq set) neqs
