@@ -2,6 +2,11 @@
 {-# HLINT ignore "Use isNothing" #-}
 {-# HLINT ignore "Use isJust" #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
 module Mather where
 
@@ -11,12 +16,237 @@ import qualified Data.Set as S
 import qualified Data.Map as M
 import qualified Data.List as L
 import qualified Data.Graph as G
-import Data.Foldable
 
-import Debug.Trace
-import AST (Expression)
+import Data.Foldable
+import Control.Monad.State.Lazy
+import Data.Proxy
+import Data.Functor
+
+
+
+import qualified EUF
+import qualified Simplex as Spx
+
+import qualified AST
+import AST(Var(Named, Slack))
 import Data.Map (valid)
+import Debug.Trace
 debug = flip trace
+
+data TheoryID = EUF | NUM | SET | SAT | STR | IMP
+    deriving (Read, Show, Eq, Ord, Enum)
+
+class Ord pred => Theory pred expr | pred -> expr, expr -> pred where
+    theory      :: pred -> TheoryID
+    convex      :: pred -> Bool
+    equate      :: expr -> expr -> pred
+    var         :: AST.Var -> expr
+    convertPred :: AST.Expression -> Maybe pred
+    convertExpr :: AST.Expression -> Maybe expr
+    satisfiable :: S.Set pred -> Bool
+ -- preprocess  :: S.Set term -> (AST.Var -> AST.Var -> Bool)
+
+
+{-
+things every theory needs:
+- an ID of some sort
+- whether it's convex or not
+- the notion of
+    - ground formulas
+    - formal variables
+    - equality formula
+- convert AST -> theory raw form
+- convert theory raw form -> theory normal form (internal)
+- decision procedure :: [formula] -> some kind of result?
+-}
+
+instance Theory EUF.Pred EUF.Expr where
+    theory _ = EUF
+    convex _ = True
+    equate lhs rhs = EUF.Eq lhs rhs
+    var v = EUF.Expr v []
+    convertPred = EUF.convertPred
+    convertExpr = EUF.convertExpr
+    satisfiable = EUF.satisfiable
+
+instance Theory Spx.Pred Spx.Expr where
+    theory _ = NUM
+    convex _ = True
+    equate lhs rhs = Spx.buildPred Spx.Eq lhs rhs
+    var v = Spx.Expr $ M.singleton (Just v) 1
+    convertPred = Spx.convertPred
+    convertExpr = Spx.convertExpr
+    satisfiable = isJust . Spx.satisfiable
+
+data GroundTerm = forall p e. (Show p, Theory p e) => Gt p
+
+showGt :: GroundTerm -> [Char]
+showGt (Gt p) = show p
+
+instance Show GroundTerm where
+    show = showGt
+
+data TAtom = Var String | Pure Integer
+    deriving (Read, Show, Ord, Eq)
+
+associateTheory :: AST.Expression -> TheoryID
+associateTheory expr = case expr of
+    AST.EmptySet -> SET
+    AST.Any -> SET
+    AST.Nats -> SET
+    AST.Ints -> SET
+    AST.Reals -> SET
+    AST.Ratios -> SET
+    AST.Sets -> SET
+    AST.RastorSet _ -> SET
+    AST.BoolVal _ -> SAT
+    AST.StrVal _ -> STR
+    AST.IntNum _ -> NUM
+    AST.FracNum _ -> NUM
+    AST.Ref _ -> EUF
+    AST.VarRef _ -> EUF
+    AST.Func _ _ -> EUF
+    AST.Applic _ _ -> EUF
+    AST.IfThenElse {} -> IMP
+    AST.Prefix op expr -> case op of
+        AST.Empty -> SET
+        AST.Even -> NUM
+        AST.Odd -> NUM
+        AST.Neg -> NUM
+        AST.Minus -> NUM
+        AST.Plus -> NUM
+    AST.Infix op e1 e2 -> case op of
+        AST.Add -> NUM
+        AST.Sub -> NUM
+        AST.Mul -> NUM
+        AST.Div -> NUM
+        AST.Equals -> EUF
+        AST.NEquals -> EUF
+        AST.Less -> NUM
+        AST.Greater -> NUM
+        AST.LessEq -> NUM
+        AST.GreaterEq -> NUM
+        AST.BAnd -> SAT
+        AST.BOr -> SAT
+        AST.Member -> SET
+        AST.Union -> SET
+        AST.Intersect -> SET
+        AST.Diff -> SET
+        AST.Symdiff -> SET
+    AST.Proc state -> IMP
+    _ -> error "unhandled"
+
+sameTheory :: AST.Expression -> AST.Expression -> Bool
+sameTheory (AST.Ref _) _ = True
+sameTheory _ (AST.Ref _) = True
+sameTheory (AST.VarRef _) _ = True
+sameTheory _ (AST.VarRef _) = True
+sameTheory e1 e2 = associateTheory e1 == associateTheory e2
+
+isTheoryOf :: TheoryID -> AST.Expression -> Bool
+isTheoryOf _ (AST.Ref _) = True
+isTheoryOf _ (AST.VarRef _) = True
+isTheoryOf t e = t == associateTheory e
+
+
+-- a purification context remembers all of the equalities
+-- generated during putification
+data PurifContext =
+    Purif {
+        sets :: M.Map TheoryID [AST.Expression],
+        slacks :: Integer
+    }
+    deriving (Show)
+
+emptyPurif = Purif { sets = M.empty, slacks = 0 }
+
+addTerm :: AST.Expression -> State PurifContext ()
+addTerm expr = state $ \purif ->
+    ((), purif {
+        sets = M.adjust (expr:) (associateTheory expr) (sets purif)
+    })
+
+addEq :: AST.Expression -> AST.Expression -> State PurifContext ()
+addEq lhs rhs = addTerm (AST.Infix AST.Equals lhs rhs)
+
+fresh :: State PurifContext AST.Var
+fresh = state $ \purif ->
+    (AST.Slack $ slacks purif, purif { slacks = slacks purif + 1 })
+
+-- substitute the expression with a fresh slack variable
+-- and add their equality to the purification context
+psubst :: TheoryID -> AST.Expression -> State PurifContext AST.Expression
+psubst t expr = if t `isTheoryOf` expr
+    then return expr
+    else do
+        v <- AST.VarRef <$> fresh
+        addEq v expr
+        return v
+
+purifyExpr :: AST.Expression -> Maybe (State PurifContext AST.Expression)
+purifyExpr expr = let thry = associateTheory expr in case expr of
+    AST.Infix op lhs rhs ->
+        Just $ do
+            lhs' <- psubst thry lhs
+            rhs' <- psubst thry rhs
+            return $ AST.Infix op lhs' rhs'
+    AST.Prefix op rhs ->
+        Just $ do
+            rhs' <- psubst thry rhs
+            return $ AST.Prefix op rhs'
+    AST.Applic func args ->
+        Just $ do
+            curr <- get :: State PurifContext PurifContext
+            args' <-
+                let substed = map (psubst thry) args
+                in  sequence substed
+            return $ AST.Applic func args'
+    _ -> Nothing
+
+{-
+purify :: AST.Expression -> State PurifContext AST.Expression
+purify expr = case expr of
+    AST.Infix op e1 e2 ->
+        if     op == AST.Add
+            || op == AST.Sub
+            || op == AST.Mul
+        then do
+            e1' <- purify e1 >>= psubstSpx
+            e2' <- purify e2 >>= psubstSpx
+            return $ AST.Infix op e1' e2'
+        else case op of
+        AST.Div -> error "unsupported nonlinear arithmetic"
+        AST.Equals -> do
+            e1' <- purify e1 >>= psubstEuf
+            e2' <- purify e2 >>= psubstEuf
+            addTerm $ Gt (fromJust $ convertPred (AST.Infix AST.Equals e1' e2') :: EUF.Pred)
+            return $ AST.Infix AST.Equals e1' e2'
+        AST.NEquals -> error "unsupported nonequalities"
+        AST.Less -> error "unsupported strict inequalities"
+        AST.Greater -> error "unsupported strict inequalities"
+        AST.LessEq ->
+            let expr' = convertPred expr
+            in do
+                when (isJust expr')
+                    (addTerm $ Gt (fromJust expr' :: Spx.Pred))
+                return expr
+        AST.GreaterEq ->
+            let expr' = convertPred expr
+            in do
+                when (isJust expr')
+                    (addTerm $ Gt (fromJust expr' :: Spx.Pred))
+                return expr
+        AST.BAnd -> error "unsupported boolean constraint"
+        AST.BOr -> error "unsupported boolean constraint"
+        AST.Member -> error "unsupported set constraint"
+        AST.Union -> error "unsupported set constraint"
+        AST.Intersect -> error "unsupported set constraint"
+        AST.Diff -> error "unsupported set constraint"
+        AST.Symdiff -> error "unsupported set constraint"
+        _ -> error "unreachable"
+    AST.Proc state -> error "unsupported imperative constraint"
+    _ -> return expr
+-}
 
 data Expr = BTrue | BFalse
           | Atom String

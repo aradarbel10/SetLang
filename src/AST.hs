@@ -3,6 +3,13 @@ module AST where
 import qualified Data.Set as S
 import qualified Data.Map as M
 
+data Var = Named String | Slack Integer
+    deriving (Read, Eq, Ord)
+
+instance Show Var where
+    show (Named str) = str
+    show (Slack i) = "s" ++ show i
+
 type Scope = M.Map Pattern Expression
 type Scopes = [Scope];
 newtype Context = Context { names :: Scopes }
@@ -37,6 +44,7 @@ data Expression = EmptySet | Any | Nats | Ints | Reals | Ratios | Sets
                 | IntNum Integer
                 | FracNum Rational
                 | Ref String
+                | VarRef Var
                 | Func Pattern Expression
                 | Applic Expression [Expression]
                 | IfThenElse Expression Expression Expression

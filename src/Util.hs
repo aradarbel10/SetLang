@@ -1,12 +1,18 @@
 module Util where
 import Distribution.Simple.Utils (xargs)
 
+import qualified Data.Set as S
+
 mapHead :: (a -> a) -> [a] -> [a]
 mapHead _ [] = []
 mapHead f (x:xs) = f x : xs
 
 applyFst :: (a -> b) -> (a, c) -> (b, c)
 applyFst f (x, y) = (f x, y)
+
+isJust :: Maybe a -> Bool
+isJust Nothing = False
+isJust (Just _) = True
 
 orElse :: Maybe a -> a -> a
 orElse Nothing a = a
@@ -53,3 +59,10 @@ untilNothing f a = case f a of
 
 unpair :: [(a, a)] -> [a]
 unpair = uncurry (++) . unzip
+
+unpairSet :: Ord a => S.Set (a, a) -> S.Set a
+unpairSet = S.unions . S.map (\(x, y) -> S.fromList [x, y])
+
+boolMaybe :: a -> Bool -> Maybe a
+boolMaybe a False = Nothing
+boolMaybe a True  = Just a
