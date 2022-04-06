@@ -2,6 +2,9 @@ module AST where
 
 import qualified Data.Set as S
 import qualified Data.Map as M
+import Data.List
+import Data.Ratio
+import Data.Tuple
 
 data Var = Named String | Slack Integer
     deriving (Read, Eq, Ord)
@@ -51,7 +54,54 @@ data Expression = EmptySet | Any | Nats | Ints | Reals | Ratios | Sets
                 | Prefix PreOp Expression
                 | Infix BinOp Expression Expression
                 | Proc Statement
-    deriving (Show, Eq, Ord)
+    deriving (Eq, Ord)
+
+
+-- generic function to operate on nested expressions
+-- iterates through every subexpression `e` of `expr`
+-- applies on each `f => (e', a)`.
+--
+-- substitutes `e'` for `e`,
+-- and accumulates `a`
+mapFoldExpression' :: (a -> a -> a) -> a -> (a -> Expression -> (Expression, a)) -> Expression -> (Expression, a)
+mapFoldExpression' append acc f expr = case expr of
+    RastorSet set ->
+        let lst = S.toList set
+            (acc', es') = mapAccumL (\x y -> swap $ f x y) acc lst
+        in  (RastorSet $ S.fromList es', acc')
+    Func p expr ->
+        let (e, a) = f acc expr
+        in (Func p e, a)
+    Applic e es ->
+        let lst = (e:es)
+            (acc', e':es') = mapAccumL (\x y -> swap $ f x y) acc lst
+        in  (Applic e' es', acc')
+    Prefix op expr ->
+        let (e, a) = f acc expr
+        in  (Prefix op e, a)
+    Infix op e1 e2 ->
+        let lst = [e1, e2]
+            (acc', [e1', e2']) = mapAccumL (\x y -> swap $ f x y) acc lst
+        in  (Infix op e1' e2', acc')
+    IfThenElse {} -> error "not implemented"
+    Proc {} -> error "not implemented"
+    _ -> (expr, acc)
+
+-- equivalent to foldMap
+foldExpression' :: (a -> a -> a) -> a -> (a -> Expression -> a) -> Expression -> a
+foldExpression' append empt f = snd . mapFoldExpression' append empt (\a e-> (EmptySet, f a e))
+
+-- monoid versions
+mapFoldExpression :: Monoid a => (a -> Expression -> (Expression, a)) -> Expression -> (Expression, a)
+mapFoldExpression = mapFoldExpression' mappend mempty
+
+foldExpression :: (Monoid a) => (a -> Expression -> a) -> Expression -> a
+foldExpression = foldExpression' mappend mempty
+
+mapExpression :: (Expression -> Expression) -> Expression -> Expression
+mapExpression f = fst . mapFoldExpression (\_ e -> (f e, ()))
+
+
 
 isProc :: Expression -> Bool
 isProc (Proc _) = True
@@ -59,11 +109,64 @@ isProc _ = False
 
 data PreOp = Empty | Even | Odd | Neg
            | Minus | Plus
-    deriving (Show, Enum, Eq, Ord)
+    deriving (Enum, Eq, Ord)
 
 data BinOp = Add | Sub | Mul | Div
            | Equals | NEquals
            | Less | Greater | LessEq | GreaterEq
            | BAnd | BOr | Member
            | Union | Intersect | Diff | Symdiff
-    deriving (Show, Enum, Eq, Ord)
+    deriving (Enum, Eq, Ord)
+
+
+instance Show PreOp where
+    show op = case op of
+        Empty -> "Empty?"
+        Even -> "Even?"
+        Odd -> "Odd?"
+        Neg -> "Neg?"
+        Minus -> "-"
+        Plus -> "+"
+
+instance Show BinOp where
+    show op = case op of
+        Add -> "+"
+        Sub -> "-"
+        Mul -> "×"
+        Div -> "÷"
+        Equals -> "="
+        NEquals -> "≠"
+        Less -> "<"
+        Greater -> ">"
+        LessEq -> "≤"
+        GreaterEq -> "≥"
+        BAnd -> "∧"
+        BOr -> "∨"
+        Member -> "∈"
+        Union -> "∪"
+        Intersect -> "∩"
+        Diff -> "\\"
+        Symdiff -> "Δ"
+
+instance Show Expression where
+    show expr = case expr of
+        EmptySet -> "∅"
+        Any -> "𝔸"
+        Nats -> "ℕ"
+        Ints -> "ℤ"
+        Reals -> "ℝ"
+        Ratios -> "ℚ"
+        Sets -> "Sets"
+        RastorSet set -> concat ["{", intercalate ", " $ map show $ S.toList set, "}"]
+        BoolVal b -> show b
+        StrVal str -> "\"" <> str <> "\""
+        IntNum n -> show n
+        FracNum rat -> "(" <> show (numerator rat) <> "/" <> show (denominator rat) <> ")"
+        Ref s -> s
+        VarRef var -> show var
+        Func _ _ -> error "not implemented"
+        Applic expr args -> concat ["(", show expr, " ", unwords (map show args), ")"]
+        IfThenElse cond tb fb -> concat ["if ", show cond, " then ", show tb, " else ", show fb]
+        Prefix op expr -> "(" <> show op <> show expr <> ")"
+        Infix op lhs rhs -> concat ["(", show lhs, " ", show op, " ", show rhs, ")"]
+        Proc _ -> error "not implemented"

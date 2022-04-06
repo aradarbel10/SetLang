@@ -7,6 +7,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module Mather where
 
@@ -33,8 +34,17 @@ import Data.Map (valid)
 import Debug.Trace
 debug = flip trace
 
-data TheoryID = EUF | NUM | SET | SAT | STR | IMP
-    deriving (Read, Show, Eq, Ord, Enum)
+data TheoryID = ANY | EUF | NUM | SET | SAT | STR | IMP
+                | THRY String
+    deriving (Read, Show, Eq, Ord)
+
+instance Semigroup TheoryID where
+    (<>) a ANY = a
+    (<>) ANY b = b
+    (<>) a _   = a
+
+instance Monoid TheoryID where
+    mempty = ANY
 
 class Ord pred => Theory pred expr | pred -> expr, expr -> pred where
     theory      :: pred -> TheoryID
@@ -103,9 +113,11 @@ associateTheory expr = case expr of
     AST.StrVal _ -> STR
     AST.IntNum _ -> NUM
     AST.FracNum _ -> NUM
-    AST.Ref _ -> EUF
-    AST.VarRef _ -> EUF
+    AST.Ref _ -> ANY
+    AST.VarRef _ -> ANY
     AST.Func _ _ -> EUF
+    AST.Applic (AST.Ref "car") [_] -> THRY "Lists"
+    AST.Applic (AST.Ref "cons") [_,_] -> THRY "Lists"
     AST.Applic _ _ -> EUF
     AST.IfThenElse {} -> IMP
     AST.Prefix op expr -> case op of
@@ -120,8 +132,8 @@ associateTheory expr = case expr of
         AST.Sub -> NUM
         AST.Mul -> NUM
         AST.Div -> NUM
-        AST.Equals -> EUF
-        AST.NEquals -> EUF
+        AST.Equals -> ANY
+        AST.NEquals -> ANY
         AST.Less -> NUM
         AST.Greater -> NUM
         AST.LessEq -> NUM
@@ -136,6 +148,12 @@ associateTheory expr = case expr of
     AST.Proc state -> IMP
     _ -> error "unhandled"
 
+argTheory :: AST.Expression -> TheoryID
+argTheory = AST.foldExpression (const associateTheory)
+
+overallTheory :: AST.Expression -> TheoryID
+overallTheory expr = associateTheory expr <> argTheory expr
+
 sameTheory :: AST.Expression -> AST.Expression -> Bool
 sameTheory (AST.Ref _) _ = True
 sameTheory _ (AST.Ref _) = True
@@ -144,6 +162,7 @@ sameTheory _ (AST.VarRef _) = True
 sameTheory e1 e2 = associateTheory e1 == associateTheory e2
 
 isTheoryOf :: TheoryID -> AST.Expression -> Bool
+isTheoryOf ANY _ = True
 isTheoryOf _ (AST.Ref _) = True
 isTheoryOf _ (AST.VarRef _) = True
 isTheoryOf t e = t == associateTheory e
@@ -160,11 +179,20 @@ data PurifContext =
 
 emptyPurif = Purif { sets = M.empty, slacks = 0 }
 
+getState :: State PurifContext PurifContext
+getState = state $ \purif -> (purif, purif)
+
 addTerm :: AST.Expression -> State PurifContext ()
-addTerm expr = state $ \purif ->
+addTerm expr = addTermThry (overallTheory expr) expr
+
+addTermThry :: TheoryID -> AST.Expression -> State PurifContext ()
+addTermThry thry expr = state $ \purif ->
     ((), purif {
-        sets = M.adjust (expr:) (associateTheory expr) (sets purif)
+        sets = M.alter (Just . insOrAlt expr) thry (sets purif)
     })
+    where insOrAlt e curr = case curr of
+            Nothing -> [e]
+            Just es -> e:es
 
 addEq :: AST.Expression -> AST.Expression -> State PurifContext ()
 addEq lhs rhs = addTerm (AST.Infix AST.Equals lhs rhs)
@@ -183,25 +211,28 @@ psubst t expr = if t `isTheoryOf` expr
         addEq v expr
         return v
 
-purifyExpr :: AST.Expression -> Maybe (State PurifContext AST.Expression)
-purifyExpr expr = let thry = associateTheory expr in case expr of
-    AST.Infix op lhs rhs ->
-        Just $ do
-            lhs' <- psubst thry lhs
-            rhs' <- psubst thry rhs
-            return $ AST.Infix op lhs' rhs'
-    AST.Prefix op rhs ->
-        Just $ do
-            rhs' <- psubst thry rhs
-            return $ AST.Prefix op rhs'
-    AST.Applic func args ->
-        Just $ do
-            curr <- get :: State PurifContext PurifContext
-            args' <-
-                let substed = map (psubst thry) args
-                in  sequence substed
-            return $ AST.Applic func args'
-    _ -> Nothing
+-- first associate a theory to the expression
+--      if the expression's root has a theory, use that
+--      otherwise, use a representative child
+-- for every child,
+--      if it doesn't match the associated theory,
+--      psubst and add to context
+-- finally add entire expression to context
+-- and return it
+purifyExpr :: AST.Expression -> State PurifContext AST.Expression
+purifyExpr expr =
+    let thry = overallTheory expr
+    in do
+        state <- get
+        let (expr', state') =
+                AST.mapFoldExpression' (>>) (void get)
+                    (\ctx e ->  let ctx' = ctx >> purifyExpr e >>= psubst thry
+                            in (evalState ctx' state, void ctx')) expr
+        state'
+        return expr'
+
+purifyPred :: AST.Expression -> State PurifContext AST.Expression
+purifyPred expr = purifyExpr expr >>= addTerm >> return expr
 
 {-
 purify :: AST.Expression -> State PurifContext AST.Expression

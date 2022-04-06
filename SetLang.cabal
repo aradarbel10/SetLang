@@ -30,6 +30,7 @@ library
       Interp
       Mather
       Simplex
+      EUF
   other-modules:
       Paths_SetLang
       Util
