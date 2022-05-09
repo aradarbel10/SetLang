@@ -1,4 +1,6 @@
-# SetLang
+# Depracated! See [spiritual successor](https://github.com/aradarbel10/ReasonableLang)
+
+# ~~SetLang~~
 An interpreted math-based recreational programming language implemented in haskell.
 
 [\[trello board\]](https://trello.com/b/TWynyRIs)
